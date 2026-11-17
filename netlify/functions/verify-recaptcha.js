@@ -66,7 +66,7 @@ exports.handler = async function (event) {
 
     const success =
       result.success === true &&
-      result.hostname === "promptslo.netlify.app";
+      result.hostname === "promptslov2.netlify.app";
 
     return {
       statusCode: 200,
