@@ -1,0 +1,8 @@
+{
+  "name": "tonyger90-prompt-hub-security",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "firebase-admin": "^13.0.2"
+  }
+}

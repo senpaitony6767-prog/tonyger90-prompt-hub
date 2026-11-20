@@ -1,0 +1,31 @@
+# TONYGER90 PROMPT HUB — security update
+
+## Files
+- `index.html`: updated front-end with an account-ban check.
+- `netlify/functions/check-ban.js`: checks the signed-in user's ban.
+- `netlify/functions/security-event.js`: records repeated failed sign-in reports and applies temporary suspensions.
+- `netlify/functions/firebase-admin.js`: shared Firebase Admin SDK setup.
+- `package.json`: installs `firebase-admin`.
+- `firebase-database.rules.json`: example Realtime Database rules that deny reads to banned users and keep security records admin-only.
+
+## Important deployment steps
+1. Keep your existing `netlify/functions/verify-recaptcha.js` unchanged. Copy the new function files beside it.
+2. Add `package.json` at the repository root. Do not delete `netlify.toml`; keep your existing Functions directory setting.
+3. In Netlify environment variables, add:
+   - `FIREBASE_SERVICE_ACCOUNT`: the complete Firebase service-account JSON (store privately; never paste it into chat or commit it).
+   - `FIREBASE_DATABASE_URL`: `https://prompt123-edad3-default-rtdb.firebaseio.com`
+   - `ADMIN_UID`: `vUMzFkWq5TaTV6ftv5q8TyFatqf1`
+4. Install dependencies during deploy (`npm install`). If your current Netlify build command is blank, set it to `npm install`; keep publish directory `.` and functions directory `netlify/functions`.
+5. Only after backing up your current Firebase rules, review and publish `firebase-database.rules.json`. These rules change free prompt reads from public to verified signed-in users. If you want free prompts public, do not publish these rules unchanged; public unauthenticated reads cannot be reliably blocked for banned users.
+6. Test with a normal verified user and the admin account before announcing the update.
+
+## Ban policy in this starter
+- 6 failed-login reports within 10 minutes: 7-day access ban.
+- A later repeat after that ban expires: 30-day access ban.
+- Permanent ban: admin-only; this starter does not automatically permanently ban users.
+- A ban affects access to this website only, not the person's Gmail or Google account.
+
+## Security limitations
+- Client-reported failed-login events can be manipulated. Firebase Authentication has its own abuse protections; this is an additional signal, not proof of wrongdoing.
+- This starter does not inspect users' devices or private activity.
+- A ban is effective only after the database rules are published and the functions are deployed.
