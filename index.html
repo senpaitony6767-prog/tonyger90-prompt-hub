@@ -27,6 +27,12 @@ footer{text-align:center;color:var(--muted);border-top:1px solid rgba(255,255,25
 #recaptchaWidget{display:flex;justify-content:center;margin:22px auto 12px;min-height:78px}
 #captchaStatus{min-height:22px;color:#94a3b8;font-size:13px}
 
+
+#securityBanGate{position:fixed;inset:0;z-index:100000;display:grid;place-items:center;padding:20px;background:rgba(3,7,18,.98)}
+#securityBanGate.hidden{display:none!important}
+.security-ban-panel{width:min(440px,100%);padding:28px 22px;border:1px solid rgba(248,113,113,.4);border-radius:22px;background:#0d1322;text-align:center;box-shadow:0 20px 70px rgba(0,0,0,.65)}
+.security-ban-panel h2{margin:0 0 10px}.security-ban-panel p{color:#94a3b8;line-height:1.6;font-size:14px}
+
 </style>
 </head>
 <body>
@@ -40,6 +46,8 @@ footer{text-align:center;color:var(--muted);border-top:1px solid rgba(255,255,25
     <div id="captchaStatus" aria-live="polite">Loading verification…</div>
   </div>
 </div>
+
+<div id="securityBanGate" class="hidden" role="dialog" aria-modal="true"><div class="security-ban-panel"><div style="font-size:36px">⛔</div><h2>Account temporarily suspended</h2><p id="securityBanMessage">Access to TONYGER90 PROMPT HUB is restricted.</p><p id="securityBanExpiry"></p></div></div>
 
 <div id="authGate" class="hidden" role="dialog" aria-modal="true" aria-labelledby="authTitle">
   <div class="auth-panel" id="authPanel"></div>
@@ -153,19 +161,70 @@ const SEED=[
 let db=null,auth=null,currentUser=null,isAdmin=false,allPrompts=[],currentTab="free",editingKey=null;
 let captchaPassed=false,authReady=false,authView="login";
 const freeCopyTimers = Object.create(null);
+
 const FREE_COPY_WAIT_SECONDS = 15;
+let securityBlocked = false;
+let securityCheckInFlight = false;
+
+async function securityRequest(path, payload) {
+  if (!currentUser) return null;
+  const token = await currentUser.getIdToken();
+  const response = await fetch("/.netlify/functions/" + path, {
+    method: "POST",
+    headers: {"Content-Type":"application/json", "Authorization":"Bearer " + token},
+    body: JSON.stringify(payload || {})
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Security service unavailable.");
+  return data;
+}
+
+function showSecurityBan(ban) {
+  securityBlocked = true;
+  $("authGate").classList.add("hidden");
+  $("securityBanGate").classList.remove("hidden");
+  $("securityBanMessage").textContent = ban.reason || "Suspicious activity was detected.";
+  const until = ban.permanent ? "This restriction has no expiry date." :
+    "Access may be restored after: " + new Date(ban.until).toLocaleString();
+  $("securityBanExpiry").textContent = until;
+}
+
+async function checkAccountSecurity(user) {
+  if (!user || securityCheckInFlight) return;
+  securityCheckInFlight = true;
+  try {
+    const result = await securityRequest("check-ban", {});
+    if (result && result.banned) showSecurityBan(result.ban || {});
+    else securityBlocked = false;
+  } catch (e) {
+    // Fail closed for protected access: do not expose the hub if the ban
+    // service cannot be reached. User can retry by refreshing.
+    securityBlocked = true;
+    $("authGate").classList.remove("hidden");
+    $("authPanel").innerHTML = '<h2>Security check unavailable</h2><p class="auth-sub">Please refresh and try again in a moment.</p>';
+  } finally {
+    securityCheckInFlight = false;
+  }
+}
+
+async function reportSecurityEvent(type) {
+  if (!currentUser || isAdmin) return;
+  try { await securityRequest("security-event", {type}); }
+  catch (_) { /* A failed telemetry request must not break normal browsing. */ }
+}
+
 const $=id=>document.getElementById(id);
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function notify(s){$("toast").innerHTML='<div class="toast">'+esc(s)+'</div>';setTimeout(()=>$("toast").innerHTML="",2600)}
 function setStatus(s){$("connection").innerHTML='<span>●</span> '+esc(s)}
-function tab(t){currentTab=t;$("freeSec").classList.toggle("hidden",t!=="free");$("premiumSec").classList.toggle("hidden",t!=="premium");$("expiredSec").classList.toggle("hidden",t!=="expired");$("ft").classList.toggle("active",t==="free");$("pt").classList.toggle("active",t==="premium");$("et").classList.toggle("active",t==="expired");draw()}
+function tab(t){if(securityBlocked)return;currentTab=t;$("freeSec").classList.toggle("hidden",t!=="free");$("premiumSec").classList.toggle("hidden",t!=="premium");$("expiredSec").classList.toggle("hidden",t!=="expired");$("ft").classList.toggle("active",t==="free");$("pt").classList.toggle("active",t==="premium");$("et").classList.toggle("active",t==="expired");draw()}
 function localDateString(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
 function isExpired(p){return !!p.expiresAt && p.expiresAt < localDateString()}
 function expiryLabel(p){return p.expiresAt ? "Expiry date: "+p.expiresAt : "No expiry date"}
 function connect(){
  try{
   firebase.initializeApp(firebaseConfig);auth=firebase.auth();db=firebase.database();
-  auth.onAuthStateChanged(user=>{currentUser=user;isAdmin=!!user&&user.uid===ADMIN_UID;authReady=true;updateUserButton();if(captchaPassed)renderAccessGate();draw();});
+  auth.onAuthStateChanged(async user=>{currentUser=user;isAdmin=!!user&&user.uid===ADMIN_UID;authReady=true;updateUserButton();if(captchaPassed){if(user && (isAdmin || user.emailVerified)){await checkAccountSecurity(user);if(!securityBlocked)renderAccessGate();}else renderAccessGate();}draw();});
   db.ref("freePrompts").on("value",snap=>{const v=snap.val()||{};allPrompts=Object.entries(v).map(([key,p])=>({...p,_key:key,type:"free"}));setStatus("Live database connected");draw();},err=>{setStatus("Database error: "+err.message);});
   db.ref("premiumPrompts").on("value",snap=>{const v=snap.val()||{};window.premiumPrompts=Object.entries(v).map(([key,p])=>({...p,_key:key,type:"premium"}));draw();},err=>{window.premiumPrompts=[];draw();});
  }catch(e){setStatus("Firebase setup error: "+e.message)}
@@ -191,7 +250,7 @@ function draw(){
  if(isAdmin){$("premiumArea").innerHTML=prem.length?'<div class="grid">'+prem.map(card).join("")+'</div>':'<div class="empty">No premium prompts added yet.</div>'}
  else $("premiumArea").innerHTML='<div class="locked"><div style="font-size:36px;margin-bottom:10px">🔐</div><h3>Premium area locked</h3><p>Premium prompts are currently visible to the admin only. Sign in with the admin account to manage or view them.</p></div>';
 }
-function startFreeCopyTimer(key){
+function startFreeCopyTimer(key){if(securityBlocked)return;
   const existing = freeCopyTimers[key];
   if(existing && (existing.ready || existing.endsAt > Date.now())) return;
   const state = freeCopyTimers[key] = {
@@ -219,7 +278,7 @@ function startFreeCopyTimer(key){
   state.timeoutId = setTimeout(tick, 200);
 }
 
-async function copyText(key,type){
+async function copyText(key,type){if(securityBlocked)return;
   const list=type==="premium"?(window.premiumPrompts||[]):allPrompts;
   const p=list.find(x=>x._key===key);
   if(!p)return;
@@ -293,10 +352,10 @@ async function loginUser(){
   try{
     const cred=await auth.signInWithEmailAndPassword(email,password);
     await cred.user.reload();currentUser=auth.currentUser;isAdmin=!!currentUser&&currentUser.uid===ADMIN_UID;
-    if(isAdmin||currentUser.emailVerified){renderAccessGate();updateUserButton();notify("Login successful.");}
+    if(isAdmin||currentUser.emailVerified){await checkAccountSecurity(currentUser);if(!securityBlocked)renderAccessGate();updateUserButton();if(!securityBlocked)notify("Login successful.");}
     else{renderAccessGate();authMessage("Please verify your email using the link we sent.");}
     draw();
-  }catch(e){authMessage(friendlyAuthError(e));}
+  }catch(e){await reportSecurityEvent("failed_login");authMessage(friendlyAuthError(e));}
 }
 async function resendVerification(){
   try{
@@ -310,7 +369,7 @@ async function checkEmailVerified(){
     if(!auth.currentUser){renderAccessGate();return;}
     await auth.currentUser.reload();currentUser=auth.currentUser;isAdmin=currentUser.uid===ADMIN_UID;
     updateUserButton();
-    if(isAdmin||currentUser.emailVerified){$("authGate").classList.add("hidden");notify("Email verified. Welcome!");draw();}
+    if(isAdmin||currentUser.emailVerified){await checkAccountSecurity(currentUser);if(!securityBlocked){$("authGate").classList.add("hidden");notify("Email verified. Welcome!");draw();}}
     else authMessage("Not verified yet. Open the email link, then try again.");
   }catch(e){authMessage(friendlyAuthError(e));}
 }
